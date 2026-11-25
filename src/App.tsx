@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BarChart3, ChevronLeft, ChevronRight, Download, History, Home, Moon, MoreHorizontal, Plus, RotateCcw, Search, Settings, Sun, Upload, X, Trash2, Pencil, Undo2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, BarChart3, ChevronLeft, ChevronRight, Download, Eye, EyeOff, GripVertical, History, Home, Moon, MoreHorizontal, Plus, RotateCcw, Search, Settings, Sun, Upload, X, Trash2, Pencil, Undo2 } from 'lucide-react';
 import type { ExpenseRow, Store } from './lib/types';
 import { loadStore, saveStore, ensureCurrentMonth, getActiveMonth, setActiveMonth, upsertRow, deleteRow, clearMonth, setBudget, updateSchema, deleteHistoryMonth } from './lib/storage';
 import { monthlyTotal, todaysExpense, averageDaily, remainingBudget } from './lib/calculator';
@@ -18,7 +18,9 @@ function Tracker(){
   const [sheet,setSheet]=useState(false);
   const [editing,setEditing]=useState<ExpenseRow|null>(null);
   const [draftAmount,setDraftAmount]=useState('');
+  const [draftAmounts,setDraftAmounts]=useState<Record<string,string>>({});
   const [draftColumn,setDraftColumn]=useState('');
+  const [focusColumn,setFocusColumn]=useState('');
   const [draftDate,setDraftDate]=useState(todayISO());
   const [draftNote,setDraftNote]=useState('');
   const [query,setQuery]=useState('');
@@ -26,6 +28,8 @@ function Tracker(){
   const [undo,setUndo]=useState<{label:string;action:()=>void}|null>(null);
   const [dark,setDark]=useState(()=>localStorage.getItem('bet-dark')?localStorage.getItem('bet-dark')==='1':matchMedia('(prefers-color-scheme: dark)').matches);
   const [clearConfirm,setClearConfirm]=useState(false);
+  const [editingBudget,setEditingBudget]=useState(false);
+  const [budgetInput,setBudgetInput]=useState('');
   const [kbInset,setKbInset]=useState<{bottom:number;maxH?:number}>({bottom:0});
 
   useEffect(()=>{
@@ -56,8 +60,19 @@ function Tracker(){
 
   const filtered=useMemo(()=>{const q=query.trim().toLowerCase(); if(!q)return rows; return rows.filter(r=>r.date.includes(q)||r.note?.toLowerCase().includes(q)||store.schema.columns.find(c=>c.id===r.columnId)?.label.toLowerCase().includes(q))},[rows,query,store.schema]);
 
-  function openSheet(row?:ExpenseRow,columnId?:string){
-    setEditing(row||null); setDraftAmount(row?String(row.amount):''); setDraftColumn(row?.columnId||columnId||visibleColumns[0]?.id||''); setDraftDate(row?.date||todayISO()); setDraftNote(row?.note||''); setSheet(true);
+  function openSheet(row?:ExpenseRow,columnId?:string,date?:string){
+    const defaultDate=date||(month.monthKey===currentMonthKey()?todayISO():`${month.monthKey}-01`);
+    setEditing(row||null);
+    setDraftAmount(row?String(row.amount):'');
+    setDraftColumn(row?.columnId||columnId||visibleColumns[0]?.id||'');
+    setFocusColumn(columnId||visibleColumns[0]?.id||'');
+    if(!row){
+      const col=columnId?visibleColumns.find(c=>c.id===columnId):undefined;
+      setDraftAmounts(col?.defaultFare?{[col.id]:String(col.defaultFare)}:{});
+    }
+    setDraftDate(row?.date||defaultDate);
+    setDraftNote(row?.note||'');
+    setSheet(true);
   }
   function closeSheet(){setSheet(false);setEditing(null)}
   function saveEntry(){
@@ -68,6 +83,23 @@ function Tracker(){
     if(amount>1000000){notify('Amount is above the safe maximum','error');return}
     const row:ExpenseRow={id:editing?.id||uid(),date:draftDate,columnId:draftColumn,amount,note:draftNote.trim()||undefined,time:new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:false})};
     setStore(s=>upsertRow(s,row)); closeSheet(); notify(editing?'Entry updated':'Entry saved');
+  }
+  function saveBatch(){
+    if(!draftDate){notify('Select a date','error');return}
+    if(draftDate>todayISO()&&Math.floor((new Date(draftDate).getTime()-new Date(todayISO()).getTime())/86400000)>1){notify('Date is more than one day in the future','error');return}
+    const entries=visibleColumns.map(c=>({columnId:c.id,amount:Number(draftAmounts[c.id])||0})).filter(e=>e.amount>0);
+    if(!entries.length){notify('Enter at least one route amount above ₹0','error');return}
+    if(entries.some(e=>e.amount>1000000)){notify('Amount is above the safe maximum','error');return}
+    const batchTotal=entries.reduce((s,e)=>s+e.amount,0);
+    if(batchTotal>5000&&!confirm(`Total ₹${batchTotal.toLocaleString('en-IN')} is above ₹5,000. Save these entries?`))return;
+    if(draftDate>todayISO()&&new Date(draftDate).getTime()>new Date(todayISO()).getTime()) notify('Future date selected','info');
+    const time=new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:false});
+    const note=draftNote.trim()||undefined;
+    const created:ExpenseRow[]=entries.map(e=>({id:uid(),date:draftDate,columnId:e.columnId,amount:e.amount,note,time}));
+    setStore(s=>{let next=s;for(const r of created)next=upsertRow(next,r);return next});
+    closeSheet();
+    notify(created.length===1?'Entry saved':`Saved ${created.length} entries`);
+    setUndo({label:created.length===1?'Entry removed':`${created.length} entries removed`,action:()=>setStore(s=>{let next=s;for(const r of created)next=deleteRow(next,r.id,draftDate.slice(0,7));return next})});
   }
   function addQuick(columnId:string){
     const col=visibleColumns.find(c=>c.id===columnId); const amount=col?.defaultFare||0;
@@ -104,7 +136,20 @@ function Tracker(){
           <div className="px-2 py-3 text-center"><span className="block text-[11px] text-gray-500 dark:text-gray-400">Left</span><strong className={`mt-0.5 block text-base ${left<0?'text-red-600':'text-gray-950 dark:text-white'}`}>{formatINR(left)}</strong></div>
         </div>
         <div className="h-1.5 bg-gray-100 dark:bg-gray-800"><div className={`h-full rounded-r-full transition-all ${budgetPct>=100?'bg-red-500':budgetPct>=80?'bg-amber-500':'bg-blue-500'}`} style={{width:`${Math.min(100,budgetPct)}%`}}/></div>
-        {month.monthKey===currentMonthKey()&&<div className="flex items-center justify-between px-3 py-2 text-[11px] text-gray-500 dark:text-gray-400"><span>Projected {formatINR(projection)}</span><span>{formatINR(avg)} / day avg</span></div>}
+        <div className="flex items-center justify-between gap-2 px-3 py-1.5 text-[11px] text-gray-500 dark:text-gray-400">
+          {editingBudget?<form onSubmit={e=>{e.preventDefault();const v=Math.max(0,Number(budgetInput)||0);setStore(s=>setBudget(s,v));setEditingBudget(false);notify('Budget updated')}} className="flex items-center gap-1.5 w-full">
+            <span className="shrink-0">Budget</span>
+            <input autoFocus inputMode="decimal" type="number" min="0" value={budgetInput} onChange={e=>setBudgetInput(e.target.value)} className="input-base !w-24 py-0.5 px-1.5 text-base sm:text-xs font-semibold"/>
+            <button type="submit" className="px-2 py-0.5 rounded bg-blue-600 text-white text-[11px] font-semibold">Save</button>
+            <button type="button" onClick={()=>setEditingBudget(false)} className="px-1.5 py-0.5 text-[11px] text-gray-500">Cancel</button>
+          </form>:<>
+            <button type="button" onClick={()=>{setBudgetInput(String(month.budget||''));setEditingBudget(true)}} className="inline-flex items-center gap-1 font-medium hover:text-blue-600 dark:hover:text-blue-400">
+              <span>Budget <b className="text-gray-800 dark:text-gray-200">{formatINR(month.budget)}</b></span>
+              <Pencil size={11}/>
+            </button>
+            {month.monthKey===currentMonthKey()&&<span className="truncate">{formatINR(avg)}/day · Proj {formatINR(projection)}</span>}
+          </>}
+        </div>
       </section>
 
       <section>
@@ -128,7 +173,7 @@ function Tracker(){
         <button onClick={repeatYesterday} className="h-[40px] shrink-0 rounded-lg border border-blue-200 px-3 text-xs font-semibold text-blue-700 dark:border-blue-900 dark:text-blue-300">Repeat yesterday</button>
       </div>
 
-      {dayGroups.length===0?<section className="flex min-h-[220px] flex-col items-center justify-center rounded-xl border border-dashed border-gray-200 px-5 text-center dark:border-gray-800"><div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-blue-50 text-blue-600 dark:bg-blue-950/50 dark:text-blue-400"><Plus size={22}/></div><h3 className="text-sm font-semibold">No expenses yet</h3><p className="mt-1 max-w-[220px] text-xs leading-5 text-gray-500 dark:text-gray-400">Tap a route above or add a custom entry to get started.</p><button onClick={()=>openSheet()} className="mt-3 min-h-[40px] rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white">Add first entry</button></section>:<div className="space-y-2">{dayGroups.map(([date,entries])=>{const dayTotal=entries.reduce((s,r)=>s+r.amount,0);return <section key={date} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900"><button onClick={()=>setOpenDay(openDay===date?null:date)} className="flex min-h-[54px] w-full items-center gap-3 px-3 text-left" aria-expanded={openDay===date}><div className="flex h-9 w-9 shrink-0 flex-col items-center justify-center rounded-lg bg-gray-100 dark:bg-gray-800"><span className="text-[10px] uppercase text-gray-500">{MONTH_NAMES[Number(date.slice(5,7))-1].slice(0,3)}</span><b className="text-sm leading-none">{Number(date.slice(8))}</b></div><div className="min-w-0 flex-1"><span className="block truncate text-xs text-gray-500 dark:text-gray-400">{entries.map(r=>{const col=visibleColumns.find(c=>c.id===r.columnId);return col?.shortLabel||col?.label||'Other'}).join(' · ')}</span><span className="mt-0.5 block text-xs text-gray-400">{entries.length} {entries.length===1?'entry':'entries'}</span></div><b className="text-base">{formatINR(dayTotal)}</b></button>{openDay===date&&<div className="border-t border-gray-100 dark:border-gray-800">{entries.map(r=><div key={r.id} className="flex min-h-[52px] items-center border-b px-3 last:border-0 border-gray-100 dark:border-gray-800"><button className="min-w-0 flex-1 text-left" onClick={()=>openSheet(r)}><span className="block truncate text-sm">{store.schema.columns.find(c=>c.id===r.columnId)?.label}</span>{r.note&&<span className="block truncate text-xs text-gray-400">{r.note}</span>}</button><b className="ml-2 text-sm">{formatINR(r.amount)}</b><button aria-label="Delete entry" onClick={()=>removeRow(r)} className="icon-btn ml-1 text-red-500"><Trash2 size={15}/></button></div>)}</div>}</section>})}</div>}
+      {dayGroups.length===0?<section className="flex min-h-[220px] flex-col items-center justify-center rounded-xl border border-dashed border-gray-200 px-5 text-center dark:border-gray-800"><div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-blue-50 text-blue-600 dark:bg-blue-950/50 dark:text-blue-400"><Plus size={22}/></div><h3 className="text-sm font-semibold">No expenses yet</h3><p className="mt-1 max-w-[220px] text-xs leading-5 text-gray-500 dark:text-gray-400">Tap a route above or add a custom entry to get started.</p><button onClick={()=>openSheet()} className="mt-3 min-h-[40px] rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white">Add first entry</button></section>:<div className="space-y-2">{dayGroups.map(([date,entries])=>{const dayTotal=entries.reduce((s,r)=>s+r.amount,0);return <section key={date} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900"><button onClick={()=>setOpenDay(openDay===date?null:date)} className="flex min-h-[54px] w-full items-center gap-3 px-3 text-left" aria-expanded={openDay===date}><div className="flex h-9 w-9 shrink-0 flex-col items-center justify-center rounded-lg bg-gray-100 dark:bg-gray-800"><span className="text-[10px] uppercase text-gray-500">{MONTH_NAMES[Number(date.slice(5,7))-1].slice(0,3)}</span><b className="text-sm leading-none">{Number(date.slice(8))}</b></div><div className="min-w-0 flex-1"><span className="block truncate text-xs text-gray-500 dark:text-gray-400">{entries.map(r=>{const col=visibleColumns.find(c=>c.id===r.columnId);return col?.shortLabel||col?.label||'Other'}).join(' · ')}</span><span className="mt-0.5 block text-xs text-gray-400">{entries.length} {entries.length===1?'entry':'entries'}</span></div><b className="text-base">{formatINR(dayTotal)}</b></button>{openDay===date&&<div className="border-t border-gray-100 dark:border-gray-800">{entries.map(r=><div key={r.id} className="flex min-h-[52px] items-center border-b px-3 last:border-0 border-gray-100 dark:border-gray-800"><button className="min-w-0 flex-1 text-left" onClick={()=>openSheet(r)}><span className="block truncate text-sm">{store.schema.columns.find(c=>c.id===r.columnId)?.label}</span>{r.note&&<span className="block truncate text-xs text-gray-400">{r.note}</span>}</button><b className="ml-2 text-sm">{formatINR(r.amount)}</b><button aria-label="Delete entry" onClick={()=>removeRow(r)} className="icon-btn ml-1 text-red-500"><Trash2 size={15}/></button></div>)}<button onClick={()=>openSheet(undefined,undefined,date)} className="flex w-full items-center justify-center gap-1 py-2 text-xs font-semibold text-blue-600 dark:text-blue-400 hover:bg-blue-50/50 dark:hover:bg-blue-950/20 border-t border-gray-100 dark:border-gray-800"><Plus size={14}/>Add entries for {Number(date.slice(8))} {MONTH_NAMES[Number(date.slice(5,7))-1].slice(0,3)}</button></div>}</section>})}</div>}
       <p className="pb-1 text-center text-[11px] text-gray-400">{rows.length} entries · {formatINR(total)} this month</p>
     </main>}
 
@@ -149,7 +194,42 @@ function Tracker(){
     <nav className="safe-bottom fixed bottom-0 inset-x-0 z-40 h-14 bg-white/95 dark:bg-gray-900/95 border-t border-gray-200 dark:border-gray-800 flex"><TabButton icon={<Home size={19}/>} label="Home" active={tab==='home'} onClick={()=>setTab('home')}/><TabButton icon={<History size={19}/>} label="History" active={tab==='history'} onClick={()=>setTab('history')}/><TabButton icon={<BarChart3 size={19}/>} label="Stats" active={tab==='stats'} onClick={()=>setTab('stats')}/><TabButton icon={<Settings size={19}/>} label="Settings" active={tab==='settings'} onClick={()=>setTab('settings')}/></nav>
     {tab==='home'&&<button onClick={()=>openSheet()} className="fixed bottom-16 right-3 z-30 w-12 h-12 rounded-full bg-blue-600 text-white shadow-lg flex items-center justify-center" aria-label="Add entry"><Plus size={24}/></button>}
 
-    {sheet&&<div className="fixed inset-0 z-50"><button className="absolute inset-0 bg-black/40" aria-label="Close entry sheet" onClick={closeSheet}/><div style={{bottom:kbInset.bottom,maxHeight:kbInset.maxH?`${kbInset.maxH}px`:'92dvh'}} className="absolute inset-x-0 overflow-y-auto rounded-t-xl bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 p-2.5 pb-[calc(10px+env(safe-area-inset-bottom))]"><div className="flex items-center justify-between mb-1.5"><b className="text-sm">{editing?'Edit entry':'Add entry'}</b><button className="icon-btn !min-h-[32px] !min-w-[32px]" aria-label="Close" onClick={closeSheet}><X size={16}/></button></div><input autoFocus inputMode="decimal" type="text" value={draftAmount} onChange={e=>setDraftAmount(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();saveEntry()}}} placeholder="₹ Amount" className="input-base text-base font-semibold py-1.5"/><div className="flex gap-1.5 overflow-x-auto py-1.5">{visibleColumns.map(c=><button key={c.id} type="button" onClick={()=>setDraftColumn(c.id)} className={`chip !min-h-[34px] px-2.5 ${draftColumn===c.id?'ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300':''}`}>{c.shortLabel||c.label}</button>)}</div><div className="grid grid-cols-[132px_1fr] gap-1.5"><input type="date" value={draftDate} onChange={e=>setDraftDate(e.target.value)} className="input-base text-base sm:text-sm py-1.5 px-2"/><input value={draftNote} onChange={e=>setDraftNote(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();saveEntry()}}} placeholder="Note (optional)" className="input-base text-base sm:text-sm py-1.5"/></div><button onClick={saveEntry} className="w-full mt-2 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold">Save</button></div></div>}
+    {sheet&&<div className="fixed inset-0 z-50"><button className="absolute inset-0 bg-black/40" aria-label="Close entry sheet" onClick={closeSheet}/><div style={{bottom:kbInset.bottom,maxHeight:kbInset.maxH?`${kbInset.maxH}px`:'92dvh'}} className="absolute inset-x-0 flex flex-col rounded-t-xl bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800">
+      {editing?<>
+        <div className="p-2.5 pb-[calc(10px+env(safe-area-inset-bottom))] overflow-y-auto">
+          <div className="flex items-center justify-between mb-1.5"><b className="text-sm">Edit entry</b><button className="icon-btn !min-h-[32px] !min-w-[32px]" aria-label="Close" onClick={closeSheet}><X size={16}/></button></div>
+          <input autoFocus inputMode="decimal" type="text" value={draftAmount} onChange={e=>setDraftAmount(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();saveEntry()}}} placeholder="₹ Amount" className="input-base text-base font-semibold py-1.5"/>
+          <div className="flex gap-1.5 overflow-x-auto py-1.5">{visibleColumns.map(c=><button key={c.id} type="button" onClick={()=>setDraftColumn(c.id)} className={`chip !min-h-[34px] px-2.5 ${draftColumn===c.id?'ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300':''}`}>{c.shortLabel||c.label}</button>)}</div>
+          <div className="grid grid-cols-[132px_1fr] gap-1.5"><input type="date" value={draftDate} onChange={e=>setDraftDate(e.target.value)} className="input-base text-base sm:text-sm py-1.5 px-2"/><input value={draftNote} onChange={e=>setDraftNote(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();saveEntry()}}} placeholder="Note (optional)" className="input-base text-base sm:text-sm py-1.5"/></div>
+          <button onClick={saveEntry} className="w-full mt-2 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold">Save</button>
+        </div>
+      </>:(()=>{
+        const batchCount=visibleColumns.filter(c=>(Number(draftAmounts[c.id])||0)>0).length;
+        const batchSum=visibleColumns.reduce((s,c)=>s+(Number(draftAmounts[c.id])||0),0);
+        return <>
+          <div className="flex items-center justify-between gap-2 px-2.5 py-2 border-b border-gray-100 dark:border-gray-800 shrink-0">
+            <b className="text-sm shrink-0">Add entries</b>
+            <input aria-label="Entry date" type="date" value={draftDate} onChange={e=>setDraftDate(e.target.value)} className="input-base !w-auto text-base sm:text-xs py-1 px-2"/>
+            <button className="icon-btn !min-h-[32px] !min-w-[32px] shrink-0" aria-label="Close" onClick={closeSheet}><X size={16}/></button>
+          </div>
+          <div className="overflow-y-auto px-2.5 py-1.5 space-y-1.5 flex-1">
+            {visibleColumns.map(c=><div key={c.id} className="flex items-center gap-2">
+              <div className="min-w-0 flex-1 flex items-center gap-1.5">
+                <span className="truncate text-xs font-medium text-gray-800 dark:text-gray-200">{c.shortLabel||c.label}</span>
+                {!!c.defaultFare&&<button type="button" onClick={()=>setDraftAmounts(a=>({...a,[c.id]:String(c.defaultFare)}))} className="shrink-0 rounded bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 text-[10px] font-medium text-gray-600 dark:text-gray-300 hover:bg-blue-50 dark:hover:bg-blue-950/40">₹{c.defaultFare}</button>}
+              </div>
+              <input autoFocus={focusColumn===c.id} inputMode="decimal" type="text" value={draftAmounts[c.id]||''} onChange={e=>setDraftAmounts(a=>({...a,[c.id]:e.target.value}))} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();saveBatch()}}} placeholder="₹ 0" className="input-base !w-24 text-right text-base sm:text-sm font-semibold py-1 px-2"/>
+            </div>)}
+          </div>
+          <div className="px-2.5 pt-1.5 pb-[calc(10px+env(safe-area-inset-bottom))] border-t border-gray-100 dark:border-gray-800 shrink-0 flex items-center gap-1.5">
+            <input value={draftNote} onChange={e=>setDraftNote(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();saveBatch()}}} placeholder="Note (optional)" className="input-base flex-1 text-base sm:text-sm py-1.5"/>
+            <button onClick={saveBatch} className="shrink-0 px-3.5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold">
+              {batchCount>0?`Save (${batchCount}) · ${formatINR(batchSum)}`:'Save'}
+            </button>
+          </div>
+        </>;
+      })()}
+    </div></div>}
 
     {undo&&<div className="fixed bottom-16 left-1/2 -translate-x-1/2 z-[60] bg-gray-900 text-white rounded-lg px-3 py-2 text-sm flex gap-3"><span>{undo.label}</span><button onClick={()=>{undo.action();setUndo(null)}} className="font-bold flex items-center gap-1"><Undo2 size={14}/>Undo</button></div>}
     {clearConfirm&&<div className="fixed inset-0 z-[70] bg-black/40 flex items-end sm:items-center justify-center p-3"><div className="bg-white dark:bg-gray-900 rounded-xl p-4 w-full max-w-sm"><b className="text-sm">Clear this month's entries?</b><p className="text-xs text-gray-500 my-2">Entries can be restored with Undo.</p><div className="flex gap-2"><button onClick={()=>setClearConfirm(false)} className="flex-1 py-2 border rounded-lg">Cancel</button><button onClick={clearMonthNow} className="flex-1 py-2 rounded-lg bg-red-600 text-white">Clear</button></div></div></div>}
@@ -169,6 +249,7 @@ function ExpenseStats({store,month}:{store:Store;month:ReturnType<typeof getActi
 function ColumnSettings({store,setStore,notify}:{store:Store;setStore:(updater:(s:Store)=>Store)=>void;notify:(m:string,t?:'success'|'error'|'info')=>void}){
  const [newLabel,setNewLabel]=useState('');
  const [newFare,setNewFare]=useState('');
+ const [dragId,setDragId]=useState<string|null>(null);
  function addRoute(){
   const label=newLabel.trim();
   if(!label){notify('Route name cannot be empty','error');return}
@@ -179,9 +260,48 @@ function ColumnSettings({store,setStore,notify}:{store:Store;setStore:(updater:(
   setNewLabel('');setNewFare('');
   notify('Route added');
  }
- function archive(id:string){const used=Object.values(store.months).some(m=>m.rows.some(r=>r.columnId===id));const schema={...store.schema,columns:store.schema.columns.map(c=>c.id===id?{...c,hidden:true}:c)};setStore(s=>updateSchema(s,schema));notify(used?'Route archived; past entries remain':'Route hidden','info')}
- function remove(id:string){const used=Object.values(store.months).some(m=>m.rows.some(r=>r.columnId===id));if(used){notify('Archive routes instead; entries exist','error');return}const schema={...store.schema,columns:store.schema.columns.filter(c=>c.id!==id)};setStore(s=>updateSchema(s,schema));notify('Route deleted')}
- return <section className="panel"><b className="text-sm">Routes</b><div className="mt-2 space-y-2">{store.schema.columns.map(c=><div key={c.id} className={`grid grid-cols-[1fr_58px_32px] gap-1 items-center ${c.hidden?'opacity-50':''}`}><input aria-label="Route label" value={c.label} onChange={e=>{const schema={...store.schema,columns:store.schema.columns.map(x=>x.id===c.id?{...x,label:e.target.value}:x)};setStore(s=>updateSchema(s,schema))}} className="input-base py-1.5"/><input aria-label="Default fare" type="number" value={c.defaultFare||''} onChange={e=>{const schema={...store.schema,columns:store.schema.columns.map(x=>x.id===c.id?{...x,defaultFare:Number(e.target.value)||0}:x)};setStore(s=>updateSchema(s,schema))}} className="input-base py-1.5"/><button aria-label={c.hidden?'Show route':'Archive route'} onClick={()=>{if(c.hidden){const schema={...store.schema,columns:store.schema.columns.map(x=>x.id===c.id?{...x,hidden:false}:x)};setStore(s=>updateSchema(s,schema))}else archive(c.id)}} className="icon-btn">{c.hidden?<Plus size={15}/>:<X size={15}/>}</button>{!c.hidden&&<button onClick={()=>remove(c.id)} className="col-start-3 text-[10px] text-red-500">Delete</button>}</div>)}<div className="grid grid-cols-[1fr_58px_auto] gap-1 items-center pt-2 border-t border-gray-100 dark:border-gray-800"><input aria-label="New route name" value={newLabel} onChange={e=>setNewLabel(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();addRoute()}}} placeholder="New route name…" className="input-base py-1.5"/><input aria-label="New route default fare" type="number" min="0" value={newFare} onChange={e=>setNewFare(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();addRoute()}}} placeholder="Fare" className="input-base py-1.5"/><button onClick={addRoute} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700"><Plus size={14}/>Add</button></div></div></section>
+ function move(idx:number,dir:-1|1){
+  const target=idx+dir;
+  if(target<0||target>=store.schema.columns.length)return;
+  const cols=store.schema.columns.slice();
+  [cols[idx],cols[target]]=[cols[target],cols[idx]];
+  setStore(s=>updateSchema(s,{...store.schema,columns:cols}));
+ }
+ function reorder(fromId:string,toId:string){
+  if(fromId===toId)return;
+  const cols=store.schema.columns.slice();
+  const fromIdx=cols.findIndex(c=>c.id===fromId);
+  const toIdx=cols.findIndex(c=>c.id===toId);
+  if(fromIdx<0||toIdx<0)return;
+  const [item]=cols.splice(fromIdx,1);
+  cols.splice(toIdx,0,item);
+  setStore(s=>updateSchema(s,{...store.schema,columns:cols}));
+ }
+ function toggleHidden(id:string,hidden?:boolean){
+  const used=Object.values(store.months).some(m=>m.rows.some(r=>r.columnId===id));
+  const schema={...store.schema,columns:store.schema.columns.map(c=>c.id===id?{...c,hidden:!hidden}:c)};
+  setStore(s=>updateSchema(s,schema));
+  notify(!hidden?(used?'Route hidden; past entries remain':'Route hidden'):'Route visible','info');
+ }
+ function remove(id:string){
+  if(store.schema.columns.length<=1){notify('At least one route is required','error');return}
+  const used=Object.values(store.months).some(m=>m.rows.some(r=>r.columnId===id));
+  if(used&&!confirm('This route has existing entries. Delete the route and its entries?'))return;
+  const schema={...store.schema,columns:store.schema.columns.filter(c=>c.id!==id)};
+  setStore(s=>updateSchema(s,schema));
+  notify('Route deleted');
+ }
+ return <section className="panel"><b className="text-sm">Routes</b><p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">Drag or use arrows to reorder. Hide to keep past entries, or delete to remove.</p><div className="mt-2 space-y-1.5">{store.schema.columns.map((c,idx)=><div key={c.id} draggable onDragStart={()=>setDragId(c.id)} onDragOver={e=>e.preventDefault()} onDrop={()=>{if(dragId)reorder(dragId,c.id);setDragId(null)}} onDragEnd={()=>setDragId(null)} className={`flex items-center gap-1 rounded-lg border border-gray-100 dark:border-gray-800 p-1 ${c.hidden?'opacity-50':''} ${dragId===c.id?'ring-2 ring-blue-500 bg-blue-50/40 dark:bg-blue-950/20':''}`}>
+  <span className="cursor-grab text-gray-400 px-0.5 hidden sm:inline-flex" title="Drag to reorder"><GripVertical size={14}/></span>
+  <div className="flex flex-col">
+   <button type="button" onClick={()=>move(idx,-1)} disabled={idx===0} aria-label="Move route up" className="p-0.5 text-gray-400 hover:text-blue-600 disabled:opacity-25"><ArrowUp size={12}/></button>
+   <button type="button" onClick={()=>move(idx,1)} disabled={idx===store.schema.columns.length-1} aria-label="Move route down" className="p-0.5 text-gray-400 hover:text-blue-600 disabled:opacity-25"><ArrowDown size={12}/></button>
+  </div>
+  <input aria-label="Route label" value={c.label} onChange={e=>{const schema={...store.schema,columns:store.schema.columns.map(x=>x.id===c.id?{...x,label:e.target.value}:x)};setStore(s=>updateSchema(s,schema))}} className="input-base flex-1 min-w-0 py-1.5 px-2"/>
+  <input aria-label="Default fare" type="number" min="0" value={c.defaultFare||''} placeholder="₹" onChange={e=>{const schema={...store.schema,columns:store.schema.columns.map(x=>x.id===c.id?{...x,defaultFare:Number(e.target.value)||0}:x)};setStore(s=>updateSchema(s,schema))}} className="input-base !w-14 py-1.5 px-1.5 text-center"/>
+  <button type="button" aria-label={c.hidden?'Show route':'Hide route'} title={c.hidden?'Show route':'Hide route'} onClick={()=>toggleHidden(c.id,c.hidden)} className="icon-btn !min-h-[34px] !min-w-[30px]">{c.hidden?<EyeOff size={15}/>:<Eye size={15}/>}</button>
+  <button type="button" aria-label="Delete route" title="Delete route" onClick={()=>remove(c.id)} className="icon-btn !min-h-[34px] !min-w-[30px] text-red-500"><Trash2 size={15}/></button>
+ </div>)}<div className="flex items-center gap-1 pt-2 border-t border-gray-100 dark:border-gray-800"><input aria-label="New route name" value={newLabel} onChange={e=>setNewLabel(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();addRoute()}}} placeholder="New route name…" className="input-base flex-1 min-w-0 py-1.5"/><input aria-label="New route default fare" type="number" min="0" value={newFare} onChange={e=>setNewFare(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();addRoute()}}} placeholder="Fare" className="input-base !w-16 py-1.5 px-2 text-center"/><button type="button" onClick={addRoute} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 shrink-0"><Plus size={14}/>Add</button></div></div></section>
 }
 
 function shouldBackupNudge(){const last=localStorage.getItem(LS_LAST_BACKUP);if(!last)return true;return Date.now()-Number(last)>30*86400000}
