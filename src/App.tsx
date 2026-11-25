@@ -244,64 +244,98 @@ function Tracker(){
 function TabButton({icon,label,active,onClick}:{icon:React.ReactNode;label:string;active:boolean;onClick:()=>void}){return <button onClick={onClick} className={`flex-1 flex flex-col items-center justify-center text-[11px] transition ${active?'text-indigo-600 dark:text-indigo-400 font-semibold':'text-slate-500 dark:text-slate-400'}`}>{icon}<span>{label}</span></button>}
 
 function ExpenseHistory({store,month,onSelectMonth,onDeleteMonth,onEditRow,onDeleteRow,onExportCSV}:{store:Store;month:ReturnType<typeof getActiveMonth>;onSelectMonth:(key:string)=>void;onDeleteMonth:(key:string)=>void;onEditRow:(row:ExpenseRow)=>void;onDeleteRow:(row:ExpenseRow)=>void;onExportCSV:()=>void}){
- const sortedRows=useMemo(()=>[...month.rows].sort((a,b)=>b.date.localeCompare(a.date)||(b.time||'').localeCompare(a.time||'')),[month.rows]);
+ const [expandedDate,setExpandedDate]=useState<string|null>(null);
+ const dayRows=useMemo(()=>{
+  const map=new Map<string,ExpenseRow[]>();
+  for(const r of month.rows){const arr=map.get(r.date)||[];arr.push(r);map.set(r.date,arr)}
+  return [...map.entries()].sort((a,b)=>b[0].localeCompare(a[0]));
+ },[month.rows]);
  const total=monthlyTotal(month.rows);
  const left=remainingBudget(month.budget,month.rows);
  return <div className="space-y-3">
   <div className="flex items-center justify-between">
    <h2 className="font-semibold text-sm">Month History</h2>
-   <button onClick={onExportCSV} className="inline-flex items-center gap-1 rounded-lg border border-gray-200 dark:border-gray-700 px-2.5 py-1 text-xs font-medium hover:bg-gray-100 dark:hover:bg-gray-800"><Download size={13}/>CSV</button>
+   <button onClick={onExportCSV} className="inline-flex items-center gap-1 rounded-xl border border-indigo-100 dark:border-slate-700 bg-white/95 dark:bg-slate-900 px-2.5 py-1 text-xs font-medium hover:bg-indigo-50/70 dark:hover:bg-slate-800"><Download size={13}/>CSV</button>
   </div>
   <div className="flex gap-2 overflow-x-auto pb-1">
    {Object.keys(store.months).sort().reverse().map(key=>{
     const m=store.months[key];
     const active=key===month.monthKey;
-    return <div key={key} className={`shrink-0 rounded-lg border px-3 py-2 flex items-center gap-2 ${active?'border-blue-500 bg-blue-50/70 dark:bg-blue-950/30':'border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900'}`}>
+    return <div key={key} className={`shrink-0 rounded-xl border px-3 py-2 flex items-center gap-2 transition ${active?'border-indigo-400 bg-indigo-50/80 dark:border-indigo-500/60 dark:bg-indigo-950/35':'border-indigo-100/90 dark:border-slate-800 bg-white/95 dark:bg-slate-900'}`}>
      <button className="text-left" onClick={()=>onSelectMonth(key)}>
       <b className="block text-xs">{formatMonthLabel(key)}</b>
-      <span className="block text-[11px] text-gray-500 dark:text-gray-400">{formatINR(monthlyTotal(m.rows))} · {m.rows.length}</span>
+      <span className="block text-[11px] text-slate-500 dark:text-slate-400">{formatINR(monthlyTotal(m.rows))} · {m.rows.length}</span>
      </button>
-     {key!==currentMonthKey()&&<button aria-label="Delete month" onClick={()=>onDeleteMonth(key)} className="p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 rounded"><Trash2 size={14}/></button>}
+     {key!==currentMonthKey()&&<button aria-label="Delete month" onClick={()=>onDeleteMonth(key)} className="p-1 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-lg"><Trash2 size={14}/></button>}
     </div>;
    })}
   </div>
   <section className="panel !p-0 overflow-hidden">
-   <div className="flex items-center justify-between px-3 py-2 border-b border-gray-100 dark:border-gray-800 text-xs">
+   <div className="flex items-center justify-between px-3 py-2 border-b border-indigo-100/80 dark:border-slate-800 text-xs">
     <b>{formatMonthLabel(month.monthKey)}</b>
-    <span className="text-gray-500 dark:text-gray-400">Spent <b className="text-gray-900 dark:text-gray-100">{formatINR(total)}</b> · Left <b className={left<0?'text-red-600':'text-gray-900 dark:text-gray-100'}>{formatINR(left)}</b></span>
+    <span className="text-slate-500 dark:text-slate-400">Spent <b className="text-slate-900 dark:text-slate-100">{formatINR(total)}</b> · Left <b className={left<0?'text-rose-600 dark:text-rose-400':'text-emerald-600 dark:text-emerald-400'}>{formatINR(left)}</b></span>
    </div>
-   {sortedRows.length===0?<p className="p-6 text-center text-xs text-gray-400">No expenses recorded for {formatMonthLabel(month.monthKey)}.</p>:<div className="overflow-x-auto">
+   {dayRows.length===0?<p className="p-6 text-center text-xs text-slate-400">No expenses recorded for {formatMonthLabel(month.monthKey)}.</p>:<div className="overflow-x-auto">
     <table className="w-full text-left border-collapse text-xs">
      <thead>
-      <tr className="border-b border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/50 text-[11px] text-gray-500 dark:text-gray-400">
+      <tr className="border-b border-indigo-100/80 dark:border-slate-800 bg-indigo-50/40 dark:bg-slate-800/50 text-[11px] text-slate-500 dark:text-slate-400">
        <th className="py-2 px-2.5 font-medium whitespace-nowrap">Date</th>
-       <th className="py-2 px-2 font-medium">Route</th>
-       <th className="py-2 px-2 font-medium text-right whitespace-nowrap">Amount</th>
-       <th className="py-2 px-2 font-medium">Note</th>
-       <th className="py-2 px-2 font-medium text-right">Actions</th>
+       <th className="py-2 px-2 font-medium">Routes &amp; Details</th>
+       <th className="py-2 px-2.5 font-medium text-right whitespace-nowrap">Total</th>
       </tr>
      </thead>
-     <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-      {sortedRows.map(r=>{
-       const col=store.schema.columns.find(c=>c.id===r.columnId);
-       const dayLabel=`${Number(r.date.slice(8))} ${MONTH_NAMES[Number(r.date.slice(5,7))-1].slice(0,3)}`;
-       return <tr key={r.id} className="hover:bg-gray-50/70 dark:hover:bg-gray-800/30">
-        <td className="py-2 px-2.5 whitespace-nowrap text-gray-600 dark:text-gray-300">{dayLabel}</td>
-        <td className="py-2 px-2 font-medium text-gray-900 dark:text-gray-100 max-w-[140px] truncate">{col?.shortLabel||col?.label||'Other'}</td>
-        <td className="py-2 px-2 text-right font-semibold tabular-nums whitespace-nowrap">{formatINR(r.amount)}</td>
-        <td className="py-2 px-2 text-gray-500 dark:text-gray-400 max-w-[120px] truncate">{r.note||'—'}</td>
-        <td className="py-1.5 px-2 text-right whitespace-nowrap">
-         <button aria-label="Edit entry" onClick={()=>onEditRow(r)} className="p-1 text-gray-500 hover:text-blue-600 rounded"><Pencil size={13}/></button>
-         <button aria-label="Delete entry" onClick={()=>onDeleteRow(r)} className="p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 rounded ml-0.5"><Trash2 size={13}/></button>
-        </td>
-       </tr>;
+     <tbody className="divide-y divide-indigo-100/70 dark:divide-slate-800">
+      {dayRows.map(([date,entries])=>{
+       const dayTotal=entries.reduce((s,r)=>s+r.amount,0);
+       const dObj=new Date(`${date}T00:00:00`);
+       const dayLabel=`${Number(date.slice(8))} ${MONTH_NAMES[Number(date.slice(5,7))-1].slice(0,3)}`;
+       const weekday=dObj.toLocaleDateString('en-IN',{weekday:'short'});
+       const notes=[...new Set(entries.map(r=>r.note).filter(Boolean))];
+       const isOpen=expandedDate===date;
+       return <>
+        <tr key={date} onClick={()=>setExpandedDate(isOpen?null:date)} className="cursor-pointer hover:bg-indigo-50/35 dark:hover:bg-slate-800/30 transition">
+         <td className="py-2 px-2.5 whitespace-nowrap align-top">
+          <span className="font-semibold text-slate-900 dark:text-slate-100 block">{dayLabel}</span>
+          <span className="text-[10px] text-slate-400">{weekday}</span>
+         </td>
+         <td className="py-2 px-2 align-top">
+          <div className="flex flex-wrap gap-1">
+           {entries.map(r=>{
+            const col=store.schema.columns.find(c=>c.id===r.columnId);
+            return <span key={r.id} className="inline-flex items-center gap-1 rounded-md bg-indigo-50/70 dark:bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-700 dark:text-slate-300">
+             <span>{col?.shortLabel||col?.label||'Other'}</span>
+             <b className="text-indigo-700 dark:text-indigo-300">{formatINR(r.amount)}</b>
+            </span>;
+           })}
+          </div>
+          {notes.length>0&&<p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 truncate max-w-[220px]">{notes.join(' · ')}</p>}
+         </td>
+         <td className="py-2 px-2.5 text-right font-bold tabular-nums whitespace-nowrap align-top text-slate-950 dark:text-white">{formatINR(dayTotal)}</td>
+        </tr>
+        {isOpen&&<tr key={`${date}-detail`} className="bg-slate-50/70 dark:bg-slate-950/40">
+         <td colSpan={3} className="px-2.5 py-1.5">
+          <div className="space-y-1">
+           {entries.map(r=>{
+            const col=store.schema.columns.find(c=>c.id===r.columnId);
+            return <div key={r.id} className="flex items-center justify-between gap-2 text-[11px] py-0.5">
+             <span className="truncate text-slate-700 dark:text-slate-300">{col?.label||'Other'}{r.note?` — ${r.note}`:''}</span>
+             <div className="flex items-center gap-1 shrink-0">
+              <b className="tabular-nums">{formatINR(r.amount)}</b>
+              <button aria-label="Edit entry" onClick={e=>{e.stopPropagation();onEditRow(r)}} className="p-1 text-slate-500 hover:text-indigo-600 rounded"><Pencil size={12}/></button>
+              <button aria-label="Delete entry" onClick={e=>{e.stopPropagation();onDeleteRow(r)}} className="p-1 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded"><Trash2 size={12}/></button>
+             </div>
+            </div>;
+           })}
+          </div>
+         </td>
+        </tr>}
+       </>;
       })}
      </tbody>
      <tfoot>
-      <tr className="border-t border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-800/40 font-semibold">
-       <td colSpan={2} className="py-2 px-2.5">Total ({sortedRows.length} entries)</td>
-       <td className="py-2 px-2 text-right tabular-nums">{formatINR(total)}</td>
-       <td colSpan={2}/>
+      <tr className="border-t border-indigo-100 dark:border-slate-700 bg-indigo-50/40 dark:bg-slate-800/40 font-semibold">
+       <td colSpan={2} className="py-2 px-2.5">Total ({dayRows.length} {dayRows.length===1?'day':'days'} · {month.rows.length} entries)</td>
+       <td className="py-2 px-2.5 text-right tabular-nums">{formatINR(total)}</td>
       </tr>
      </tfoot>
     </table>
