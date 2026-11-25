@@ -38,6 +38,12 @@ export function clampNonNegative(v: number): number {
   return Number.isFinite(v) && v > 0 ? v : 0;
 }
 
+export function shiftMonth(key: string, delta: number): string {
+  const [y, m] = key.split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return monthKeyFromDate(d);
+}
+
 export function downloadFile(filename: string, content: string, type = 'text/csv;charset=utf-8;') {
   const blob = new Blob([content], { type });
   const url = URL.createObjectURL(blob);

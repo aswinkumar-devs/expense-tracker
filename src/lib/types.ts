@@ -1,6 +1,9 @@
 export type ColumnDef = {
   id: string;
   label: string;
+  shortLabel?: string;
+  defaultFare?: number;
+  hidden?: boolean;
 };
 
 export type Schema = {
@@ -10,36 +13,36 @@ export type Schema = {
 
 export type ExpenseRow = {
   id: string;
-  date: string; // YYYY-MM-DD
-  values: Record<string, number>; // keyed by column id
+  date: string;
+  time?: string;
+  columnId: string;
+  amount: number;
   note?: string;
 };
 
 export type MonthData = {
-  monthKey: string; // YYYY-MM
+  monthKey: string;
   budget: number;
   rows: ExpenseRow[];
-  createdAt: string; // ISO
+  createdAt: string;
 };
-
-export type History = Record<string, MonthData>; // keyed by YYYY-MM
 
 export type Store = {
   schema: Schema;
-  currentMonth: MonthData;
-  history: History;
+  months: Record<string, MonthData>;
+  activeMonthKey: string;
 };
 
 export const DEFAULT_SCHEMA: Schema = {
-  noteEnabled: false,
+  noteEnabled: true,
   columns: [
-    { id: 'sk', label: 'Somanur → Karumathampatti' },
-    { id: 'kg', label: 'Karumathampatti → Gandhipuram' },
-    { id: 'grp', label: 'Gandhipuram → R.S. Puram' },
-    { id: 'rpg', label: 'R.S. Puram → Gandhipuram' },
-    { id: 'gk', label: 'Gandhipuram → Karumathampatti' },
-    { id: 'ks', label: 'Karumathampatti → Somanur' },
-    { id: 'others', label: 'Others' },
+    { id: 'sk', label: 'Somanur → Karumathampatti', shortLabel: 'Som→Kar', defaultFare: 0 },
+    { id: 'kg', label: 'Karumathampatti → Gandhipuram', shortLabel: 'Kar→Gan', defaultFare: 0 },
+    { id: 'grp', label: 'Gandhipuram → R.S. Puram', shortLabel: 'Gan→R.S.', defaultFare: 0 },
+    { id: 'rpg', label: 'R.S. Puram → Gandhipuram', shortLabel: 'R.S.→Gan', defaultFare: 0 },
+    { id: 'gk', label: 'Gandhipuram → Karumathampatti', shortLabel: 'Gan→Kar', defaultFare: 0 },
+    { id: 'ks', label: 'Karumathampatti → Somanur', shortLabel: 'Kar→Som', defaultFare: 0 },
+    { id: 'others', label: 'Others', shortLabel: 'Others', defaultFare: 0 },
   ],
 };
 

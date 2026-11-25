@@ -1,14 +1,15 @@
 import type { Store, MonthData, ExpenseRow, Schema } from './types';
 import { DEFAULT_SCHEMA, schemaColumnIds } from './types';
-import { currentMonthKey } from './utils';
-import { emptyRow } from './calculator';
+import { currentMonthKey, monthKeyFromDate, uid } from './utils';
 
 const KEY = 'busExpenseTracker';
 const SCHEMA_KEY = 'busExpenseTracker.schema';
-const DEFAULT_BUDGET = 5000;
+export const DEFAULT_BUDGET = 5000;
 
-function freshMonth(key: string): MonthData {
-  return { monthKey: key, budget: DEFAULT_BUDGET, rows: [], createdAt: new Date().toISOString() };
+function monthSort(a: string, b: string) { return b.localeCompare(a); }
+
+function freshMonth(key: string, budget = DEFAULT_BUDGET): MonthData {
+  return { monthKey: key, budget, rows: [], createdAt: new Date().toISOString() };
 }
 
 function loadSchema(): Schema {
@@ -16,59 +17,87 @@ function loadSchema(): Schema {
     const raw = localStorage.getItem(SCHEMA_KEY);
     if (!raw) return DEFAULT_SCHEMA;
     const parsed = JSON.parse(raw) as Schema;
-    if (!parsed.columns || !Array.isArray(parsed.columns) || parsed.columns.length === 0) return DEFAULT_SCHEMA;
-    return parsed;
-  } catch {
-    return DEFAULT_SCHEMA;
+    if (!parsed.columns || !Array.isArray(parsed.columns) || !parsed.columns.length) return DEFAULT_SCHEMA;
+    return {
+      ...parsed,
+      columns: parsed.columns.map((c) => ({ shortLabel: c.shortLabel, defaultFare: c.defaultFare, hidden: c.hidden, ...c })),
+    };
+  } catch { return DEFAULT_SCHEMA; }
+}
+
+export function saveSchema(schema: Schema): void { localStorage.setItem(SCHEMA_KEY, JSON.stringify(schema)); }
+
+type LegacyRecord = Record<string, unknown>;
+
+function migrateExpense(row: LegacyRecord, schema: Schema): ExpenseRow[] {
+  if (typeof row.amount === 'number' && typeof row.columnId === 'string') {
+    return [{ id: typeof row.id === 'string' ? row.id : uid(), date: String(row.date), time: typeof row.time === 'string' ? row.time : undefined, columnId: row.columnId, amount: row.amount, note: typeof row.note === 'string' ? row.note.trim() : undefined }];
   }
-}
-
-function saveSchema(schema: Schema): void {
-  localStorage.setItem(SCHEMA_KEY, JSON.stringify(schema));
-}
-
-// Migrate legacy rows that used fixed fields (sk, kg, etc.) to the new `values` record
-function migrateRow(row: any): ExpenseRow {
-  if (row.values && typeof row.values === 'object') return row as ExpenseRow;
-  const values: Record<string, number> = {};
-  for (const col of DEFAULT_SCHEMA.columns) {
-    values[col.id] = typeof row[col.id] === 'number' ? row[col.id] : 0;
+  if (row.values && typeof row.values === 'object') {
+    return Object.entries(row.values as Record<string, number>).flatMap(([columnId, value]) => {
+      const amount = typeof value === 'number' ? value : 0;
+      return amount > 0 ? [{ id: uid(), date: String(row.date), time: typeof row.time === 'string' ? row.time : undefined, columnId, amount, note: typeof row.note === 'string' ? row.note.trim() : undefined }] : [];
+    });
   }
-  return { id: row.id, date: row.date, values };
+  return schema.columns.flatMap((c) => {
+    const value = row[c.id];
+    const amount = typeof value === 'number' ? value : 0;
+    return amount > 0 ? [{ id: uid(), date: String(row.date), time: typeof row.time === 'string' ? row.time : undefined, columnId: c.id, amount, note: typeof row.note === 'string' ? row.note.trim() : undefined }] : [];
+  });
 }
 
-function migrateMonth(m: any): MonthData {
-  return {
-    monthKey: m.monthKey,
-    budget: typeof m.budget === 'number' ? m.budget : DEFAULT_BUDGET,
-    rows: Array.isArray(m.rows) ? m.rows.map(migrateRow) : [],
-    createdAt: m.createdAt || new Date().toISOString(),
-  };
+function migrateMonth(raw: LegacyRecord, schema: Schema, fallbackKey: string): MonthData {
+  const monthKey = typeof raw.monthKey === 'string' && /^\d{4}-\d{2}$/.test(raw.monthKey) ? raw.monthKey : fallbackKey;
+  const rows = Array.isArray(raw.rows) ? raw.rows.flatMap((r) => migrateExpense(r as LegacyRecord, schema)) : [];
+  return { monthKey, budget: typeof raw.budget === 'number' ? raw.budget : DEFAULT_BUDGET, rows, createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString() };
 }
 
 export function loadStore(): Store {
   const schema = loadSchema();
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) {
-      const cur = freshMonth(currentMonthKey());
-      const store: Store = { schema, currentMonth: cur, history: {} };
-      saveStore(store);
-      return store;
+  const raw = localStorage.getItem(KEY);
+  let parsed: LegacyRecord | null = null;
+  try { parsed = raw ? JSON.parse(raw) as LegacyRecord : null; } catch { parsed = null; }
+
+  if (parsed?.months && typeof parsed.months === 'object') {
+    const months: Record<string, MonthData> = {};
+    for (const [key, value] of Object.entries(parsed.months)) months[key] = migrateMonth(value as LegacyRecord, schema, key);
+    const currentKey = currentMonthKey();
+    if (!months[currentKey]) {
+      const priorKey = Object.keys(months).sort(monthSort)[0];
+      const priorBudget = priorKey ? months[priorKey].budget : DEFAULT_BUDGET;
+      months[currentKey] = freshMonth(currentKey, priorBudget);
     }
-    const parsed = JSON.parse(raw);
-    const currentMonth = migrateMonth(parsed.currentMonth);
-    const history: Record<string, MonthData> = {};
-    if (parsed.history) {
-      for (const [k, v] of Object.entries(parsed.history)) {
-        history[k] = migrateMonth(v);
-      }
-    }
-    return { schema, currentMonth, history };
-  } catch {
-    const cur = freshMonth(currentMonthKey());
-    return { schema, currentMonth: cur, history: {} };
+    const active = typeof parsed.activeMonthKey === 'string' && months[parsed.activeMonthKey] ? parsed.activeMonthKey : currentKey;
+    const store: Store = { schema, months, activeMonthKey: active };
+    saveStore(store);
+    return store;
   }
+
+  if (raw) {
+    const oneTimeBackupKey = `${KEY}.old-backup`;
+    if (!localStorage.getItem(oneTimeBackupKey)) localStorage.setItem(oneTimeBackupKey, raw);
+  }
+
+  const months: Record<string, MonthData> = {};
+  if (parsed?.currentMonth && typeof parsed.currentMonth === 'object') {
+    const currentKey = currentMonthKey();
+    const current = migrateMonth(parsed.currentMonth as LegacyRecord, schema, currentKey);
+    months[current.monthKey || currentKey] = current;
+  }
+  if (parsed?.history && typeof parsed.history === 'object') {
+    for (const [key, value] of Object.entries(parsed.history)) {
+      months[key] = migrateMonth(value as LegacyRecord, schema, key);
+    }
+  }
+  const currentKey = currentMonthKey();
+  if (!months[currentKey]) {
+    const priorKeys = Object.keys(months).sort(monthSort);
+    const priorBudget = priorKeys[0] ? months[priorKeys[0]].budget : DEFAULT_BUDGET;
+    months[currentKey] = freshMonth(currentKey, priorBudget);
+  }
+  const store: Store = { schema, months, activeMonthKey: currentKey };
+  saveStore(store);
+  return store;
 }
 
 export function saveStore(store: Store): void {
@@ -77,63 +106,70 @@ export function saveStore(store: Store): void {
 }
 
 export function updateSchema(store: Store, schema: Schema): Store {
-  // Ensure all rows have values for new columns, drop removed ones
   const ids = new Set(schemaColumnIds(schema));
-  const fixRow = (r: ExpenseRow): ExpenseRow => {
-    const values: Record<string, number> = {};
-    for (const id of ids) values[id] = r.values[id] || 0;
-    return { ...r, values };
-  };
-  const currentMonth = { ...store.currentMonth, rows: store.currentMonth.rows.map(fixRow) };
-  const history: Record<string, MonthData> = {};
-  for (const [k, m] of Object.entries(store.history)) {
-    history[k] = { ...m, rows: m.rows.map(fixRow) };
+  const months: Record<string, MonthData> = {};
+  for (const [key, month] of Object.entries(store.months)) {
+    months[key] = { ...month, rows: month.rows.filter((r) => ids.has(r.columnId)) };
   }
-  return { schema, currentMonth, history };
+  return { ...store, schema, months };
 }
 
-export function archiveCurrentMonth(store: Store): Store {
-  const cur = store.currentMonth;
-  const history = { ...store.history, [cur.monthKey]: cur };
-  const newMonth = freshMonth(currentMonthKey());
-  const next: Store = { ...store, currentMonth: newMonth, history };
-  saveStore(next);
-  return next;
+export function ensureCurrentMonth(store: Store): Store {
+  const key = currentMonthKey();
+  if (store.months[key]) return store.activeMonthKey === key ? store : { ...store, activeMonthKey: key };
+  const priorKey = Object.keys(store.months).sort(monthSort)[0];
+  const budget = priorKey ? store.months[priorKey].budget : DEFAULT_BUDGET;
+  return { ...store, months: { ...store.months, [key]: freshMonth(key, budget) }, activeMonthKey: key };
 }
 
-export function loadMonthFromHistory(store: Store, monthKey: string): Store {
-  if (monthKey === store.currentMonth.monthKey) return store;
-  const hist = store.history[monthKey];
-  if (!hist) return store;
-  const history = { ...store.history, [store.currentMonth.monthKey]: store.currentMonth };
-  delete history[monthKey];
-  return { ...store, currentMonth: hist, history };
+export function setActiveMonth(store: Store, key: string): Store {
+  return store.months[key] ? { ...store, activeMonthKey: key } : store;
 }
 
-export function updateCurrentMonth(store: Store, patch: Partial<MonthData>): Store {
-  return { ...store, currentMonth: { ...store.currentMonth, ...patch } };
+export function getActiveMonth(store: Store): MonthData {
+  return store.months[store.activeMonthKey] || store.months[currentMonthKey()] || freshMonth(currentMonthKey());
 }
 
 export function upsertRow(store: Store, row: ExpenseRow): Store {
-  const rows = store.currentMonth.rows;
-  const idx = rows.findIndex((r) => r.id === row.id);
-  let nextRows: ExpenseRow[];
-  if (idx >= 0) {
-    nextRows = rows.slice();
-    nextRows[idx] = row;
-  } else {
-    nextRows = [...rows, row];
-  }
-  nextRows.sort((a, b) => a.date.localeCompare(b.date));
-  return updateCurrentMonth(store, { rows: nextRows });
+  const key = row.date.slice(0, 7);
+  const month = store.months[key] || freshMonth(key, store.months[store.activeMonthKey]?.budget ?? DEFAULT_BUDGET);
+  const idx = month.rows.findIndex((r) => r.id === row.id);
+  const rows = idx >= 0 ? month.rows.map((r, i) => i === idx ? row : r) : [...month.rows, row];
+  rows.sort((a, b) => `${a.date}${a.time || ''}`.localeCompare(`${b.date}${b.time || ''}`));
+  return { ...store, months: { ...store.months, [key]: { ...month, rows } } };
 }
 
-export function deleteRow(store: Store, id: string): Store {
-  return updateCurrentMonth(store, { rows: store.currentMonth.rows.filter((r) => r.id !== id) });
+export function deleteRow(store: Store, id: string, monthKey = store.activeMonthKey): Store {
+  const month = store.months[monthKey];
+  if (!month) return store;
+  return { ...store, months: { ...store.months, [monthKey]: { ...month, rows: month.rows.filter((r) => r.id !== id) } } };
 }
 
-export function setBudget(store: Store, budget: number): Store {
-  return updateCurrentMonth(store, { budget });
+export function setBudget(store: Store, budget: number, monthKey = store.activeMonthKey): Store {
+  const month = store.months[monthKey];
+  if (!month) return store;
+  return { ...store, months: { ...store.months, [monthKey]: { ...month, budget } } };
 }
 
-export { DEFAULT_BUDGET, emptyRow, DEFAULT_SCHEMA };
+export function clearMonth(store: Store, monthKey: string): Store {
+  const month = store.months[monthKey];
+  if (!month) return store;
+  return { ...store, months: { ...store.months, [monthKey]: { ...month, rows: [] } } };
+}
+
+export function deleteHistoryMonth(store: Store, monthKey: string): Store {
+  if (monthKey === currentMonthKey()) return store;
+  const months = { ...store.months }; delete months[monthKey];
+  return { ...store, months, activeMonthKey: store.activeMonthKey === monthKey ? currentMonthKey() : store.activeMonthKey };
+}
+
+export function archiveCurrentMonth(store: Store): Store { return store; }
+export function loadMonthFromHistory(store: Store, monthKey: string): Store { return setActiveMonth(store, monthKey); }
+export function updateCurrentMonth(store: Store, patch: Partial<MonthData>): Store {
+  const key = store.activeMonthKey;
+  const month = store.months[key];
+  if (!month) return store;
+  return { ...store, months: { ...store.months, [key]: { ...month, ...patch } } };
+}
+
+export { DEFAULT_SCHEMA, freshMonth, monthKeyFromDate };

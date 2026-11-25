@@ -49,7 +49,7 @@ export function ExpenseTable({ rows, schema, onEdit, onDelete }: Props) {
                   </td>
                   {schema.columns.map((col) => (
                     <td key={col.id} className="px-3 py-2.5 text-right text-gray-700 dark:text-gray-300">
-                      {r.values[col.id] ? formatINR(r.values[col.id]) : <span className="text-gray-300 dark:text-gray-600">—</span>}
+                      {r.columnId === col.id ? formatINR(r.amount) : <span className="text-gray-300 dark:text-gray-600">—</span>}
                     </td>
                   ))}
                   <td className="px-3 py-2.5 text-right font-semibold text-blue-700 dark:text-blue-300">
@@ -130,7 +130,7 @@ export function ExpenseTable({ rows, schema, onEdit, onDelete }: Props) {
               {schema.columns.map((col) => (
                 <div key={col.id} className="flex justify-between items-center text-xs">
                   <span className="text-gray-500 truncate pr-1" title={col.label}>{col.label}</span>
-                  <span className="font-medium text-gray-800 dark:text-gray-200">{r.values[col.id] ? formatINR(r.values[col.id]) : '—'}</span>
+                  <span className="font-medium text-gray-800 dark:text-gray-200">{r.columnId === col.id ? formatINR(r.amount) : '—'}</span>
                 </div>
               ))}
             </div>
