@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, BarChart3, ChevronLeft, ChevronRight, Download, Eye, EyeOff, GripVertical, History, Home, Moon, MoreHorizontal, Plus, RotateCcw, Search, Settings, Sun, Upload, X, Trash2, Pencil, Undo2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, BarChart3, ChevronLeft, ChevronRight, Download, Eye, EyeOff, GripVertical, History, Home, Moon, MoreHorizontal, Plus, RotateCcw, Search, Settings, Sun, Upload, Wallet, X, Trash2, Pencil, Undo2 } from 'lucide-react';
 import type { ExpenseRow, Store } from './lib/types';
 import { loadStore, saveStore, ensureCurrentMonth, getActiveMonth, setActiveMonth, upsertRow, deleteRow, clearMonth, setBudget, updateSchema, deleteHistoryMonth } from './lib/storage';
 import { monthlyTotal, todaysExpense, averageDaily, remainingBudget } from './lib/calculator';
 import { currentMonthKey, formatINR, formatMonthLabel, MONTH_NAMES, shiftMonth, todayISO, uid } from './lib/utils';
 import { exportMonthCSV } from './lib/csv';
 import { ToastProvider, useToast } from './components/Toast';
+import { SalaryTracker } from './components/SalaryTracker';
 
 const LS_LAST_BACKUP='busExpenseTracker.lastBackup';
 
-type Tab='home'|'history'|'stats'|'settings';
+type Tab='home'|'history'|'stats'|'salary'|'settings';
 
 function Tracker(){
   const {notify}=useToast();
@@ -62,18 +63,33 @@ function Tracker(){
 
   const filtered=useMemo(()=>{const q=query.trim().toLowerCase(); if(!q)return rows; return rows.filter(r=>r.date.includes(q)||r.note?.toLowerCase().includes(q)||store.schema.columns.find(c=>c.id===r.columnId)?.label.toLowerCase().includes(q))},[rows,query,store.schema]);
 
+  function prefillBatchDate(targetDate:string,columnId?:string){
+    const existing=(store.months[targetDate.slice(0,7)]?.rows||[]).filter(r=>r.date===targetDate);
+    const map:Record<string,number>={};
+    for(const r of existing)map[r.columnId]=(map[r.columnId]||0)+r.amount;
+    const next:Record<string,string>={};
+    for(const [k,v] of Object.entries(map))if(v>0)next[k]=String(v);
+    if(columnId&&!next[columnId]){
+      const col=visibleColumns.find(c=>c.id===columnId);
+      if(col?.defaultFare)next[col.id]=String(col.defaultFare);
+    }
+    const existingNote=existing.map(r=>r.note).filter(Boolean).pop()||'';
+    setDraftDate(targetDate);
+    setDraftAmounts(next);
+    setDraftNote(existingNote);
+  }
   function openSheet(row?:ExpenseRow,columnId?:string,date?:string){
     const defaultDate=date||(month.monthKey===currentMonthKey()?todayISO():`${month.monthKey}-01`);
     setEditing(row||null);
     setDraftAmount(row?String(row.amount):'');
     setDraftColumn(row?.columnId||columnId||visibleColumns[0]?.id||'');
     setFocusColumn(columnId||visibleColumns[0]?.id||'');
-    if(!row){
-      const col=columnId?visibleColumns.find(c=>c.id===columnId):undefined;
-      setDraftAmounts(col?.defaultFare?{[col.id]:String(col.defaultFare)}:{});
+    if(row){
+      setDraftDate(row.date);
+      setDraftNote(row.note||'');
+    }else{
+      prefillBatchDate(defaultDate,columnId);
     }
-    setDraftDate(row?.date||defaultDate);
-    setDraftNote(row?.note||'');
     setSheet(true);
   }
   function closeSheet(){setSheet(false);setEditing(null)}
@@ -97,11 +113,13 @@ function Tracker(){
     if(draftDate>todayISO()&&new Date(draftDate).getTime()>new Date(todayISO()).getTime()) notify('Future date selected','info');
     const time=new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:false});
     const note=draftNote.trim()||undefined;
+    const mKey=draftDate.slice(0,7);
+    const prevRows=(store.months[mKey]?.rows||[]).filter(r=>r.date===draftDate);
     const created:ExpenseRow[]=entries.map((e,idx)=>({id:uid(),date:draftDate,columnId:e.columnId,amount:e.amount,note:idx===entries.length-1?note:undefined,time}));
-    setStore(s=>{let next=s;for(const r of created)next=upsertRow(next,r);return next});
+    setStore(s=>{let next=s;for(const old of prevRows)next=deleteRow(next,old.id,mKey);for(const r of created)next=upsertRow(next,r);return next});
     closeSheet();
-    notify(created.length===1?'Entry saved':`Saved ${created.length} entries`);
-    setUndo({label:created.length===1?'Entry saved':`Saved ${created.length} entries`,action:()=>setStore(s=>{let next=s;for(const r of created)next=deleteRow(next,r.id,draftDate.slice(0,7));return next})});
+    notify(prevRows.length?`Updated ${created.length} ${created.length===1?'entry':'entries'}`:created.length===1?'Entry saved':`Saved ${created.length} entries`);
+    setUndo({label:prevRows.length?'Day entries updated':created.length===1?'Entry saved':`Saved ${created.length} entries`,action:()=>setStore(s=>{let next=s;for(const r of created)next=deleteRow(next,r.id,mKey);for(const old of prevRows)next=upsertRow(next,old);return next})});
   }
   function addQuick(columnId:string){
     const col=visibleColumns.find(c=>c.id===columnId); const amount=col?.defaultFare||0;
@@ -183,6 +201,8 @@ function Tracker(){
 
     {tab==='stats'&&<main className="max-w-xl mx-auto px-3 py-3"><ExpenseStats store={store} month={month}/></main>}
 
+    {tab==='salary'&&<main className="max-w-xl mx-auto px-3 py-3"><SalaryTracker monthKey={month.monthKey} notify={notify}/></main>}
+
     {tab==='settings'&&<main className="max-w-xl mx-auto px-3 py-3 space-y-3"><h2 className="font-semibold text-sm">Settings</h2>
       {shouldBackupNudge()&&<div className="text-xs border border-amber-300 bg-amber-50 dark:bg-amber-950/30 rounded-lg p-2">Backup recommended · your last JSON backup is over 30 days old</div>}
       <label className="block text-xs text-gray-500">Monthly budget<input type="number" min="0" value={month.budget} onChange={e=>setStore(s=>setBudget(s,Math.max(0,Number(e.target.value))))} className="input-base mt-1"/></label>
@@ -193,7 +213,7 @@ function Tracker(){
       <ColumnSettings store={store} setStore={setStore} notify={notify}/>
     </main>}
 
-    <nav className="safe-bottom fixed bottom-0 inset-x-0 z-40 h-14 bg-white/80 dark:bg-slate-900/85 backdrop-blur-xl border-t border-indigo-100/80 dark:border-slate-800/80 shadow-[0_-2px_12px_rgba(79,70,229,0.05)] flex"><TabButton icon={<Home size={19}/>} label="Home" active={tab==='home'} onClick={()=>setTab('home')}/><TabButton icon={<History size={19}/>} label="History" active={tab==='history'} onClick={()=>setTab('history')}/><TabButton icon={<BarChart3 size={19}/>} label="Stats" active={tab==='stats'} onClick={()=>setTab('stats')}/><TabButton icon={<Settings size={19}/>} label="Settings" active={tab==='settings'} onClick={()=>setTab('settings')}/></nav>
+    <nav className="safe-bottom fixed bottom-0 inset-x-0 z-40 h-14 bg-white/80 dark:bg-slate-900/85 backdrop-blur-xl border-t border-indigo-100/80 dark:border-slate-800/80 shadow-[0_-2px_12px_rgba(79,70,229,0.05)] flex"><TabButton icon={<Home size={19}/>} label="Home" active={tab==='home'} onClick={()=>setTab('home')}/><TabButton icon={<History size={19}/>} label="History" active={tab==='history'} onClick={()=>setTab('history')}/><TabButton icon={<BarChart3 size={19}/>} label="Stats" active={tab==='stats'} onClick={()=>setTab('stats')}/><TabButton icon={<Wallet size={19}/>} label="Salary" active={tab==='salary'} onClick={()=>setTab('salary')}/><TabButton icon={<Settings size={19}/>} label="Settings" active={tab==='settings'} onClick={()=>setTab('settings')}/></nav>
     {tab==='home'&&<button onClick={()=>openSheet()} className="fixed bottom-16 right-3 z-30 w-12 h-12 rounded-full bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white shadow-lg shadow-indigo-500/30 flex items-center justify-center transition" aria-label="Add entry"><Plus size={24}/></button>}
 
     {sheet&&<div className="fixed inset-0 z-50"><button className="absolute inset-0 bg-slate-950/50 backdrop-blur-[1px]" aria-label="Close entry sheet" onClick={closeSheet}/><div style={{bottom:kbInset.bottom,maxHeight:kbInset.maxH?`${kbInset.maxH}px`:'92dvh'}} className="absolute inset-x-0 flex flex-col rounded-t-2xl bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 shadow-2xl">
@@ -212,8 +232,8 @@ function Tracker(){
           <div className="flex items-center justify-between gap-1.5 px-2.5 py-2 border-b border-slate-100 dark:border-slate-800 shrink-0">
             <b className="text-sm shrink-0">Add entries</b>
             <div className="flex items-center gap-1">
-              <button type="button" onClick={()=>{const d=new Date();d.setDate(d.getDate()-1);setDraftDate(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`)}} className="rounded-lg px-2 py-1 text-[11px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-indigo-600">Yesterday</button>
-              <input aria-label="Entry date" type="date" value={draftDate} onChange={e=>setDraftDate(e.target.value)} className="input-base !w-auto text-base sm:text-xs py-1 px-2"/>
+              <button type="button" onClick={()=>{const d=new Date();d.setDate(d.getDate()-1);prefillBatchDate(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`)}} className="rounded-lg px-2 py-1 text-[11px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-indigo-600">Yesterday</button>
+              <input aria-label="Entry date" type="date" value={draftDate} onChange={e=>prefillBatchDate(e.target.value)} className="input-base !w-auto text-base sm:text-xs py-1 px-2"/>
             </div>
             <button className="icon-btn !min-h-[32px] !min-w-[32px] shrink-0" aria-label="Close" onClick={closeSheet}><X size={16}/></button>
           </div>
