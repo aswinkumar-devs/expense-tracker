@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, BarChart3, ChevronLeft, ChevronRight, Download, Eye, EyeOff, GripVertical, History, Home, Moon, MoreHorizontal, Plus, RotateCcw, Search, Settings, Sun, Upload, Wallet, X, Trash2, Pencil, Undo2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, BarChart3, CheckSquare, ChevronLeft, ChevronRight, Download, Eye, EyeOff, GripVertical, History, Home, Menu, Moon, Plus, RotateCcw, Search, Settings, Sun, Upload, Wallet, X, Trash2, Pencil, Undo2 } from 'lucide-react';
 import type { ExpenseRow, Store } from './lib/types';
 import { loadStore, saveStore, ensureCurrentMonth, getActiveMonth, setActiveMonth, upsertRow, deleteRow, clearMonth, setBudget, updateSchema, deleteHistoryMonth } from './lib/storage';
 import { monthlyTotal, todaysExpense, averageDaily, remainingBudget } from './lib/calculator';
@@ -7,13 +7,15 @@ import { currentMonthKey, formatINR, formatMonthLabel, MONTH_NAMES, shiftMonth, 
 import { exportMonthCSV } from './lib/csv';
 import { ToastProvider, useToast } from './components/Toast';
 import { SalaryTracker } from './components/SalaryTracker';
+import { TodoReminder, useTodoReminderWatcher } from './components/TodoReminder';
 
 const LS_LAST_BACKUP='busExpenseTracker.lastBackup';
 
-type Tab='home'|'history'|'stats'|'salary'|'settings';
+type Tab='home'|'history'|'stats'|'salary'|'todos'|'settings';
 
 function Tracker(){
   const {notify}=useToast();
+  const dueTodoCount=useTodoReminderWatcher(notify);
   const [store,setStore]=useState<Store>(()=>ensureCurrentMonth(loadStore()));
   const [tab,setTab]=useState<Tab>('home');
   const [sheet,setSheet]=useState(false);
@@ -29,6 +31,7 @@ function Tracker(){
   const [undo,setUndo]=useState<{label:string;action:()=>void}|null>(null);
   const [dark,setDark]=useState(()=>localStorage.getItem('bet-dark')?localStorage.getItem('bet-dark')==='1':matchMedia('(prefers-color-scheme: dark)').matches);
   const [clearConfirm,setClearConfirm]=useState(false);
+  const [menuOpen,setMenuOpen]=useState(false);
   const [editingBudget,setEditingBudget]=useState(false);
   const [budgetInput,setBudgetInput]=useState('');
   const [kbInset,setKbInset]=useState<{bottom:number;maxH?:number}>({bottom:0});
@@ -52,7 +55,7 @@ function Tracker(){
   useEffect(()=>{const id=setInterval(()=>setStore(s=>ensureCurrentMonth(s)),60000);return()=>clearInterval(id)},[]);
   useEffect(()=>{if(!navigator.storage?.persist)return; navigator.storage.persist().catch(()=>{})},[]);
   useEffect(()=>{if(!undo)return;const t=setTimeout(()=>setUndo(null),5000);return()=>clearTimeout(t)},[undo]);
-  useEffect(()=>{const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape'){if(clearConfirm)setClearConfirm(false);else if(sheet)closeSheet()}};window.addEventListener('keydown',onKey);return()=>window.removeEventListener('keydown',onKey)},[sheet,clearConfirm]);
+  useEffect(()=>{const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape'){if(menuOpen)setMenuOpen(false);else if(clearConfirm)setClearConfirm(false);else if(sheet)closeSheet()}};window.addEventListener('keydown',onKey);return()=>window.removeEventListener('keydown',onKey)},[sheet,clearConfirm,menuOpen]);
 
   const month=getActiveMonth(store); const rows=month.rows;
   const today=todayISO();
@@ -144,8 +147,26 @@ function Tracker(){
       </button>
       <button className="icon-btn" aria-label="Next month" onClick={()=>setStore(s=>setActiveMonth(s,shiftMonth(month.monthKey,1)))}><ChevronRight size={18}/></button>
       <button className="icon-btn" aria-label="Toggle dark mode" onClick={()=>setDark(d=>!d)}>{dark?<Sun size={18} className="text-amber-400"/>:<Moon size={18} className="text-indigo-600"/>}</button>
-      <button className="icon-btn" aria-label="Open settings" onClick={()=>setTab('settings')}><MoreHorizontal size={18}/></button>
+      <button className="icon-btn relative" aria-label="Open menu" aria-expanded={menuOpen} onClick={()=>setMenuOpen(o=>!o)}>
+        {menuOpen?<X size={18}/>:<Menu size={18}/>}
+        {!menuOpen&&dueTodoCount>0&&<span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-500"/>}
+      </button>
     </header>
+    {menuOpen&&<div className="fixed inset-0 z-40" onClick={()=>setMenuOpen(false)}>
+      <div onClick={e=>e.stopPropagation()} className="absolute right-3 top-14 w-56 rounded-2xl border border-indigo-100 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl shadow-xl p-1.5 space-y-1">
+        <button onClick={()=>{setTab('salary');setMenuOpen(false)}} className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition ${tab==='salary'?'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300':'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'}`}>
+          <Wallet size={16} className="text-indigo-500"/><span>Salary &amp; Wallet</span>
+        </button>
+        <button onClick={()=>{setTab('todos');setMenuOpen(false)}} className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition ${tab==='todos'?'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300':'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'}`}>
+          <span className="flex items-center gap-2.5"><CheckSquare size={16} className="text-emerald-500"/><span>Tasks &amp; Reminders</span></span>
+          {dueTodoCount>0&&<span className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">{dueTodoCount}</span>}
+        </button>
+        <div className="border-t border-slate-100 dark:border-slate-800 my-1"/>
+        <button onClick={()=>{setTab('settings');setMenuOpen(false)}} className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition ${tab==='settings'?'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300':'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'}`}>
+          <Settings size={16} className="text-slate-500"/><span>Settings</span>
+        </button>
+      </div>
+    </div>}
 
     {tab==='home'&&<main className="max-w-lg mx-auto px-3 sm:px-4 pt-3 pb-4 space-y-3">
       {month.monthKey!==currentMonthKey()&&<div className="flex justify-end px-1 text-xs"><button onClick={()=>setStore(s=>setActiveMonth(s,currentMonthKey()))} className="font-medium text-indigo-600 dark:text-indigo-400">Back to today</button></div>}
@@ -203,6 +224,8 @@ function Tracker(){
 
     {tab==='salary'&&<main className="max-w-xl mx-auto px-3 py-3"><SalaryTracker monthKey={month.monthKey} notify={notify}/></main>}
 
+    {tab==='todos'&&<main className="max-w-xl mx-auto px-3 py-3"><TodoReminder notify={notify}/></main>}
+
     {tab==='settings'&&<main className="max-w-xl mx-auto px-3 py-3 space-y-3"><h2 className="font-semibold text-sm">Settings</h2>
       {shouldBackupNudge()&&<div className="text-xs border border-amber-300 bg-amber-50 dark:bg-amber-950/30 rounded-lg p-2">Backup recommended · your last JSON backup is over 30 days old</div>}
       <label className="block text-xs text-gray-500">Monthly budget<input type="number" min="0" value={month.budget} onChange={e=>setStore(s=>setBudget(s,Math.max(0,Number(e.target.value))))} className="input-base mt-1"/></label>
@@ -213,7 +236,7 @@ function Tracker(){
       <ColumnSettings store={store} setStore={setStore} notify={notify}/>
     </main>}
 
-    <nav className="safe-bottom fixed bottom-0 inset-x-0 z-40 h-14 bg-white/80 dark:bg-slate-900/85 backdrop-blur-xl border-t border-indigo-100/80 dark:border-slate-800/80 shadow-[0_-2px_12px_rgba(79,70,229,0.05)] flex"><TabButton icon={<Home size={19}/>} label="Home" active={tab==='home'} onClick={()=>setTab('home')}/><TabButton icon={<History size={19}/>} label="History" active={tab==='history'} onClick={()=>setTab('history')}/><TabButton icon={<BarChart3 size={19}/>} label="Stats" active={tab==='stats'} onClick={()=>setTab('stats')}/><TabButton icon={<Wallet size={19}/>} label="Salary" active={tab==='salary'} onClick={()=>setTab('salary')}/><TabButton icon={<Settings size={19}/>} label="Settings" active={tab==='settings'} onClick={()=>setTab('settings')}/></nav>
+    <nav className="safe-bottom fixed bottom-0 inset-x-0 z-40 h-14 bg-white/80 dark:bg-slate-900/85 backdrop-blur-xl border-t border-indigo-100/80 dark:border-slate-800/80 shadow-[0_-2px_12px_rgba(79,70,229,0.05)] flex"><TabButton icon={<Home size={19}/>} label="Home" active={tab==='home'} onClick={()=>setTab('home')}/><TabButton icon={<History size={19}/>} label="History" active={tab==='history'} onClick={()=>setTab('history')}/><TabButton icon={<BarChart3 size={19}/>} label="Stats" active={tab==='stats'} onClick={()=>setTab('stats')}/><TabButton icon={<Settings size={19}/>} label="Settings" active={tab==='settings'} onClick={()=>setTab('settings')}/></nav>
     {tab==='home'&&<button onClick={()=>openSheet()} className="fixed bottom-16 right-3 z-30 w-12 h-12 rounded-full bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white shadow-lg shadow-indigo-500/30 flex items-center justify-center transition" aria-label="Add entry"><Plus size={24}/></button>}
 
     {sheet&&<div className="fixed inset-0 z-50"><button className="absolute inset-0 bg-slate-950/50 backdrop-blur-[1px]" aria-label="Close entry sheet" onClick={closeSheet}/><div style={{bottom:kbInset.bottom,maxHeight:kbInset.maxH?`${kbInset.maxH}px`:'92dvh'}} className="absolute inset-x-0 flex flex-col rounded-t-2xl bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 shadow-2xl">
